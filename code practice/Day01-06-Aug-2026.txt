@@ -1,7 +1,7 @@
 #-------------------------------------------------
 Day 01 — Basics
 🔹 Ansible Task — Install Nginx on Pathnex Server
-#-------------------------------------------------
+#---------------------------------------------------
 - name: Install Nginx on Pathnex Server
   hosts: all
   become: yes

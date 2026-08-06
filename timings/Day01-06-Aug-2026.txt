@@ -1,5 +1,5 @@
 What I did today:
-
+-----------------
 30 mins Coding
 
 1 hour - Revised Linux Commands
@@ -10,7 +10,7 @@ What I did today:
 
 
 Tomorrow's Plan:
-
+---------------
 1 hour - Revised Linux Commands and Interview Questions
 
 1 hour - Revised Git commands and Interview Questions
