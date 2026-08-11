@@ -1,0 +1,32 @@
+What I did today:
+-----------------
+3:20   -  Attended Morning Class
+
+30 mins hour - Revised Linux Commands
+
+30 mins hour  - Git commands
+
+30 mins  - Prepared to explain in the Evening class
+
+30 mins  - Prepared to make intro Video
+
+
+Tomorrow's Plan:
+---------------
+30 mins - Revised Linux Commands and Interview Questions
+
+30 mins - Revised Git commands and Interview Questions
+
+30 mins - Practice Shell Scripting
+
+30 mins - Practice Python Scripting
+
+30 mins - Revised the topics of Class3 of AWS
+
+30 mins - Revise the topics of Class1 and class2 of AWS
+
+30 mins - Prepare to explain in the Evening Class
+
+30 mins - Prepare for Intro Video
+
+
