@@ -1,0 +1,27 @@
+iWhat I did today:
+-----------------
+3:30 mins Morning Class
+
+
+1.5 hour  - Prepared to explain in the Evening class
+
+1.5 hour  - Prepared to make intro Video
+
+2   hours - Prepared docker
+
+1   hour  - Push the github code
+
+Tomorrow's Plan:
+---------------
+1 hour - Revised Linux Commands and Interview Questions
+
+1 hour - Revised Git commands and Interview Questions
+
+1 hour - Practice Shell Scripting
+
+1 hour - Prepare to explain in the Evening Class
+
+1 hour - Prepare for Intro Video
+
+1 hour - Docker Interview QA
+
