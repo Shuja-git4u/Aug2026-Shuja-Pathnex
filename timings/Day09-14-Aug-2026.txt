@@ -1,0 +1,30 @@
+What I did today:
+-----------------
+3 hours Morning Class attended
+
+
+2 hour  - Prepared Namespace, types of Default Namespace in Kubernetes
+
+1 hour  - Prepared to make intro Video
+
+1 hour  - Difference between docker and kubernetes
+
+
+
+Tomorrow's Plan:
+---------------
+1 hour - Revised Linux Commands and Interview Questions
+
+1 hour - Revised Git commands and Interview Questions
+
+1 hour - Practice Shell Scripting
+
+1 hour - Prepare to explain in the Evening Class
+
+1 hour - Prepare for Intro Video
+
+1 hour - Prepare Docker & Kubernetes
+
+1 hour - Prepare AWS
+-------------------------------------------------------
+
