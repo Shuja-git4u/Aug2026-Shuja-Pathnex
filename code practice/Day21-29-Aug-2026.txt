@@ -1,0 +1,274 @@
+#Day 21 — Disaster Recovery and Backup Strategies 📄 week4/Day21.md
+#******************************************************************
+#Day 21 — Disaster Recovery and Backup Strategies
+#******************************************************************
+#Ansible — Backup and Restore Files
+#******************************************************************
+---
+- name: Backup and Restore Files
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Create backup of /etc directory
+      ansible.builtin.command:
+        cmd: tar -czvf /tmp/etc-backup.tar.gz /etc
+
+    - name: Restore backup
+      ansible.builtin.command:
+        cmd: tar -xzvf /tmp/etc-backup.tar.gz -C /
+
+#**************************************************
+#Important note
+
+#Your original task:
+
+copy:
+  src: /tmp/etc-backup.tar.gz
+  dest: /tmp/etc-backup.tar.gz
+#***************************************************
+#If your requirement is to create a backup on Server 1, transfer it to the Ansible control node, copy it to Server 2, and restore it there, you can use the following playbook.
+#****************************************************************************************************************************
+---
+- name: Create backup on Source Server
+  hosts: source
+  become: true
+  tasks:
+
+    - name: Create backup of /etc directory
+      ansible.builtin.command:
+        cmd: tar -czf /tmp/etc-backup.tar.gz /etc
+
+    - name: Download backup to Ansible control node
+      ansible.builtin.fetch:
+        src: /tmp/etc-backup.tar.gz
+        dest: /tmp/etc-backup.tar.gz
+        flat: true
+
+
+- name: Transfer and restore backup on Destination Server
+  hosts: destination
+  become: true
+  tasks:
+
+    - name: Copy backup to destination server
+      ansible.builtin.copy:
+        src: /tmp/etc-backup.tar.gz
+        dest: /tmp/etc-backup.tar.gz
+        mode: "0644"
+
+    - name: Restore /etc backup
+      ansible.builtin.command:
+        cmd: tar -xzf /tmp/etc-backup.tar.gz -C /
+
+    - name: Remove backup from destination server
+      ansible.builtin.file:
+        path: /tmp/etc-backup.tar.gz
+        state: absent
+#*************************************************
+#Inventory example
+
+#Your inventory file could look like this:
+
+[source]
+server1 ansible_host=192.168.1.10
+
+[destination]
+server2 ansible_host=192.168.1.20
+#*************************************************
+# Terraform — Create S3 Bucket with Cross-Region Replication
+#*************************************************
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+# AWS provider - US East
+provider "aws" {
+  alias  = "us_east"
+  region = "us-east-1"
+}
+
+# AWS provider - EU West
+provider "aws" {
+  alias  = "eu_west"
+  region = "eu-west-1"
+}
+
+# S3 bucket in US East
+resource "aws_s3_bucket" "pathnex_bucket" {
+  provider = aws.us_east
+  bucket   = "pathnex-backup-bucket"
+
+  tags = {
+    Name = "Pathnex Backup Bucket US East"
+  }
+}
+
+# Enable versioning for US East bucket
+resource "aws_s3_bucket_versioning" "pathnex_bucket_versioning" {
+  provider = aws.us_east
+  bucket   = aws_s3_bucket.pathnex_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# S3 bucket in EU West
+resource "aws_s3_bucket" "pathnex_backup_bucket_eu" {
+  provider = aws.eu_west
+  bucket   = "pathnex-backup-bucket-eu"
+
+  tags = {
+    Name = "Pathnex Backup Bucket EU West"
+  }
+}
+
+# Enable versioning for EU West bucket
+resource "aws_s3_bucket_versioning" "pathnex_backup_bucket_eu_versioning" {
+  provider = aws.eu_west
+  bucket   = aws_s3_bucket.pathnex_backup_bucket_eu.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Upload backup file to US East bucket
+resource "aws_s3_object" "pathnex_backup_file" {
+  provider = aws.us_east
+
+  bucket = aws_s3_bucket.pathnex_bucket.id
+  key    = "backup.tar.gz"
+  source = "pathnex-backup.tar.gz"
+
+  etag = filemd5("pathnex-backup.tar.gz")
+}
+#******************************************************************************
+#Kubernetes — Disaster Recovery with Persistent Volumes
+#******************************************************************************
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pathnex
+spec:
+  clusterIP: None
+  selector:
+    app: pathnex
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pathnex-statefulset
+
+spec:
+  serviceName: pathnex
+  replicas: 3
+
+  selector:
+    matchLabels:
+      app: pathnex
+
+  template:
+    metadata:
+      labels:
+        app: pathnex
+
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+
+          ports:
+            - containerPort: 80
+              name: http
+
+          volumeMounts:
+            - name: web-content
+              mountPath: /usr/share/nginx/html
+
+  volumeClaimTemplates:
+    - metadata:
+        name: web-content
+
+      spec:
+        accessModes:
+          - ReadWriteOnce
+
+        resources:
+          requests:
+            storage: 5Gi
+#***************************************************
+#Jenkinsfile — Backup Strategy for Jenkins Workspace
+#***************************************************
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Backup') {
+            steps {
+                echo 'Backing up Jenkins workspace...'
+
+                sh '''
+                    tar -czf /tmp/jenkins-backup.tar.gz \
+                    -C "${WORKSPACE}" .
+                '''
+            }
+        }
+
+        stage('Restore') {
+            steps {
+                echo 'Restoring Jenkins workspace...'
+
+                sh '''
+                    tar -xzf /tmp/jenkins-backup.tar.gz \
+                    -C "${WORKSPACE}"
+                '''
+            }
+        }
+    }
+}
+#***********************************************************
+#GitLab CI/CD — Backup and Restore Deployment Files
+#***********************************************************
+stages:
+  - backup
+  - restore
+
+backup:
+  stage: backup
+  script:
+    - tar -czf backup.tar.gz -C kubernetes deployment.yaml
+
+  artifacts:
+    paths:
+      - backup.tar.gz
+    expire_in: 1 hour
+
+restore:
+  stage: restore
+  script:
+    - tar -xzf backup.tar.gz -C kubernetes/
+#**************************************************************
+#Docker compose
+#***************************************************************
+services:
+  web:
+    image: nginx:latest
+    container_name: pathnex-nginx
+    ports:
+      - "80:80"
+#***************************************************************
+
