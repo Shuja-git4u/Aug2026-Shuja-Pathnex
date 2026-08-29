@@ -1,0 +1,29 @@
+What I did today:
+-----------------
+
+1 hour  - Kubernetes
+
+1 hour  - Ansible
+
+1 hour  - terraform
+
+1 hour  - Prepared to make intro Video
+
+1 hour  - coding practice
+
+
+Tomorrow's Plan:
+---------------
+1 hour - Revised Linux Commands and Interview Questions
+
+1 hour - Revised Git commands and Interview Questions
+
+1 hour - Practice Shell Scripting
+
+1 hour - Prepare to explain in the Evening Class
+
+1 hour - Prepare for Intro Video
+
+5 hour - Kubernetes Lab
+
+
