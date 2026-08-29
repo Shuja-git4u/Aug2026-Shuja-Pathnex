@@ -1,0 +1,201 @@
+#Day 19 — Advanced Monitoring, Logging, and Security
+#***************************************************
+# Ansible — Setup Prometheus for Monitoring
+#***************************************************
+---
+- name: Install Prometheus for Monitoring
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Install Prometheus and Node Exporter
+      ansible.builtin.yum:
+        name:
+          - prometheus
+          - prometheus-node-exporter
+        state: present
+
+    - name: Start and enable Prometheus service
+      ansible.builtin.service:
+        name: prometheus
+        state: started
+        enabled: true
+#*************************************************
+#Terraform — Setup AWS CloudWatch for Monitoring
+#*************************************************
+# Create a CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "pathnex_log_group" {
+  name = "pathnex-log-group"
+}
+
+# Create a CloudWatch Log Stream
+resource "aws_cloudwatch_log_stream" "pathnex_log_stream" {
+  name           = "pathnex-log-stream"
+  log_group_name = aws_cloudwatch_log_group.pathnex_log_group.name
+}
+#*****************************************************************
+#Kubernetes — Deploy Fluentd for Logging
+#*****************************************************************
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fluentd
+  labels:
+    app: fluentd
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: fluentd
+
+  template:
+    metadata:
+      labels:
+        app: fluentd
+
+    spec:
+      containers:
+        - name: fluentd
+          image: fluent/fluentd:latest
+
+          ports:
+            - containerPort: 24224
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fluentd
+
+spec:
+  selector:
+    app: fluentd
+
+  ports:
+    - protocol: TCP
+      port: 24224
+      targetPort: 24224
+
+  type: ClusterIP
+#************************************************
+#Jenkinsfile — Integrating Prometheus Monitoring in Pipeline
+#*************************************************
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'pathnex-web-app'
+    }
+
+    stages {
+
+        stage('Build') {
+            steps {
+                script {
+                    echo 'Building Docker image...'
+                    docker.build("${env.IMAGE_NAME}")
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Running tests...'
+
+                // Add your actual test commands here
+                // sh 'npm test'
+            }
+        }
+
+        stage('Deploy and Monitor') {
+            steps {
+                script {
+                    echo 'Deploying application to Kubernetes...'
+                    sh 'kubectl apply -f kubernetes/deployment.yaml'
+
+                    echo 'Checking deployment status...'
+                    sh 'kubectl rollout status deployment/pathnex-web-app'
+
+                    echo 'Checking running pods...'
+                    sh 'kubectl get pods'
+                }
+            }
+        }
+    }
+}
+#****************************************************************************
+#GitLab CI/CD — Prometheus and Logging Integration
+#****************************************************************************
+stages:
+  - build
+  - push
+  - deploy
+
+variables:
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE/pathnex-web-app"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+
+build:
+  stage: build
+  script:
+    - docker build -t "$IMAGE_NAME:$IMAGE_TAG" .
+
+push:
+  stage: push
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker push "$IMAGE_NAME:$IMAGE_TAG"
+
+deploy:
+  stage: deploy
+  script:
+    - kubectl apply -f kubernetes/deployment.yaml
+    - kubectl rollout status deployment/pathnex-web-app
+    - kubectl get pods
+#**********************************************************************************
+#Flask Application (Python)
+##*********************************************************************************
+from flask import Flask
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return "Hello Pathnex"
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+#***********************************************************************************
+#Docker File
+#***********************************************************************************
+FROM python:3.11
+
+WORKDIR /opt/pathnex/flask-app
+
+COPY . .
+
+RUN pip install flask
+
+CMD ["python", "app.py"]
+#*************************************
+#Better practice (recommended)
+#If you have a requirements.txt file, use this:
+#**********************************************
+FROM python:3.11
+
+WORKDIR /opt/pathnex/flask-app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["python", "app.py"]
+#*************************************************
+
