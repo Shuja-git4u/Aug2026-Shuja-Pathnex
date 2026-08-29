@@ -1,0 +1,231 @@
+#**********************************************************
+#Day 13 — Advanced Automation with CloudFormation and CI/CD
+#**********************************************************
+#Ansible — Multi-Node Nginx Setup
+#********************************
+- name: Setup Nginx on multiple nodes
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Install nginx
+      yum:
+        name: nginx
+        state: present
+
+    - name: Start nginx service
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+#**********************************************************
+# Terraform — Create IAM Users and Policies
+#**********************************************************
+resource "aws_iam_user" "example_user" {
+  name = "pathnex_user"
+}
+
+resource "aws_iam_policy" "example_policy" {
+  name        = "pathnex-policy"
+  description = "Policy for Pathnex application"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Action   = "s3:ListBucket"
+        Effect   = "Allow"
+        Resource = "arn:aws:s3:::pathnex-bucket"
+      }
+    ]
+  })
+}
+#**************************************************************
+# Kubernetes — Deploy Nginx with ConfigMap and Secrets
+#**************************************************************
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+data:
+  nginx.conf: |
+    server {
+      listen 80;
+      server_name localhost;
+
+      location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+      }
+    }
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nginx-secret
+type: Opaque
+data:
+  password: cGF0aG5leHBhc3M=
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pathnex-nginx
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: pathnex-nginx
+
+  template:
+    metadata:
+      labels:
+        app: pathnex-nginx
+
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config
+
+        - name: nginx-secret
+          secret:
+            secretName: nginx-secret
+#********
+#Important point about your Secret
+
+#In the above manifest, the Secret volume is defined but not mounted inside the container. So currently, the Nginx container is not actually using the Secret.
+
+#If you want to mount the Secret as a file, add this under volumeMounts:
+#**************************************************************************
+volumeMounts:
+  - name: nginx-config
+    mountPath: /etc/nginx/nginx.conf
+    subPath: nginx.conf
+
+  - name: nginx-secret
+    mountPath: /etc/nginx/secret
+    readOnly: true
+
+#Then the Secret volume:
+volumes:
+  - name: nginx-secret
+    secret:
+      secretName: nginx-secret
+#**************************************************************************
+#The password will then be available inside the container as:
+
+/etc/nginx/secret/password
+#Also, cGF0aG5leHBhc3M= is Base64-encoded data. It decodes to:
+
+pathnexpass
+#****************************************************************************
+#Jenkinsfile — Multi-Branch Pipeline with Docker Build
+#****************************************************************************
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                script {
+                    docker.build('pathnex-app')
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh 'kubectl apply -f kubernetes/deployment.yaml'
+            }
+        }
+    }
+}
+#***************************************************************************
+#
+#***************************************************************************
+stages:
+  - build
+  - push
+  - deploy
+
+build:
+  stage: build
+  script:
+    - docker build -t pathnex-web-app .
+
+push:
+  stage: push
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker tag pathnex-web-app "$CI_REGISTRY_IMAGE:pathnex-web-app"
+    - docker push "$CI_REGISTRY_IMAGE:pathnex-web-app"
+
+deploy:
+  stage: deploy
+  script:
+    - helm repo add pathnex https://charts.pathnex.com
+    - helm repo update
+    - helm upgrade --install pathnex-nginx pathnex/nginx-ingress
+#*******
+#correction in the above GitLab pipeline:
+#*****************************************
+- docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
+
+It's better to specify the GitLab registry:
+
+- docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+Docker image push
+
+Simply doing:
+
+docker push pathnex-web-app
+
+would try to push an image named pathnex-web-app to a registry, but you normally need to tag it with the registry path first:
+
+- docker tag pathnex-web-app "$CI_REGISTRY_IMAGE:pathnex-web-app"
+- docker push "$CI_REGISTRY_IMAGE:pathnex-web-app"
+
+$CI_REGISTRY_IMAGE is a predefined GitLab CI/CD variable representing your project's container registry location.
+
+3. Helm deployment
+
+Your command:
+
+helm install pathnex-nginx pathnex/nginx-ingress
+
+works for a first-time installation, but:
+
+helm upgrade --install pathnex-nginx pathnex/nginx-ingress
+
+is generally more convenient in CI/CD because it installs if the release doesn't exist and upgrades it if it already exists.
+
+One more requirement: the GitLab Runner executing these jobs must have Docker and Helm installed, and for the deployment stage it must also have access/credentials to the target Kubernetes cluster.
+#************************************************************************
+# Docker
+
+#COPY vs ADD
+#************************************************************************
+FROM ubuntu:latest
+
+COPY pathnex-file.txt /opt/pathnex/files/
+
+ADD pathnex.tar.gz /opt/pathnex/extracted/
+#*************************************************************************
+
+
