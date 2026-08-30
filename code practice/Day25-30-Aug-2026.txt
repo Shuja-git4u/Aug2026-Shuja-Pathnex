@@ -1,0 +1,184 @@
+#Day 25 — Continuous Monitoring and Alerts
+#Ansible — Setup Prometheus Node Exporter for Monitoring
+#*******************************************************
+---
+- name: Setup Prometheus Node Exporter
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Install Prometheus Node Exporter
+      ansible.builtin.yum:
+        name: prometheus-node-exporter
+        state: present
+
+    - name: Start and enable Prometheus Node Exporter
+      ansible.builtin.service:
+        name: prometheus-node-exporter
+        state: started
+        enabled: true
+#*****************************************************
+# Terraform — Create CloudWatch Alarm
+#*****************************************************
+
+resource "aws_cloudwatch_metric_alarm" "pathnex_cpu_alarm" {
+  alarm_name          = "pathnex-cpu-utilization-high"
+  comparison_operator = "GreaterThanThreshold"
+
+  evaluation_periods = 1
+  metric_name        = "CPUUtilization"
+  namespace          = "AWS/EC2"
+  period             = 60
+  statistic          = "Average"
+  threshold          = 80
+
+  dimensions = {
+    InstanceId = aws_instance.pathnex_ec2.id
+  }
+
+  alarm_description = "Alarm when EC2 CPU utilization exceeds 80%"
+
+  alarm_actions = [
+    aws_sns_topic.pathnex_alerts.arn
+  ]
+
+  treat_missing_data = "notBreaching"
+}
+
+
+# SNS Topic
+
+resource "aws_sns_topic" "pathnex_alerts" {
+  name = "pathnex-alerts"
+}
+#************************************************************************
+# Prometheus Deployment
+#************************************************************************
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: prometheus
+
+  template:
+    metadata:
+      labels:
+        app: prometheus
+
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:latest
+          ports:
+            - containerPort: 9090
+
+---
+# Prometheus Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector:
+    app: prometheus
+
+  ports:
+    - port: 9090
+      targetPort: 9090
+
+---
+# Grafana Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: grafana
+
+  template:
+    metadata:
+      labels:
+        app: grafana
+
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:latest
+          ports:
+            - containerPort: 3000
+
+---
+# Grafana Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+spec:
+  selector:
+    app: grafana
+
+  ports:
+    - port: 3000
+      targetPort: 3000
+#***********************************************
+# Jenkinsfile — Continuous Monitoring and Alerts in CI Pipeline
+#**************************************************************
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Monitor') {
+            steps {
+                echo 'Publishing CPU metric to CloudWatch...'
+
+                sh '''
+                    aws cloudwatch put-metric-data \
+                      --namespace "AWS/EC2" \
+                      --metric-name "CPUUtilization" \
+                      --value 90 \
+                      --unit Percent
+                '''
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Running tests...'
+            }
+        }
+    }
+}
+#********************************************************
+#GitLab CI/CD — Monitoring and Alerting in CI/CD Pipeline
+#********************************************************
+stages:
+  - monitor
+  - test
+
+monitor:
+  stage: monitor
+  script:
+    - aws cloudwatch put-metric-data --namespace "AWS/EC2" --metric-name "CPUUtilization" --value 90 --unit Percent
+
+test:
+  stage: test
+  script:
+    - echo "Running tests..."
+#***************************************************************************
+# Docker
+# .dockerignore file
+#***************************************************************************
+node_modules
+.git
+temp
+#**********************
