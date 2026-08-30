@@ -1,0 +1,77 @@
+Day 28 — Advanced Networking with VPCs and Peering
+🔹 Ansible — Set Up VPC Peering Between AWS Accounts
+#***************************************************
+---
+- name: Setup VPC Peering Between Accounts
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Create VPC peering connection
+      ansible.builtin.command:
+        cmd: >
+          aws ec2 create-vpc-peering-connection
+          --vpc-id vpc-12345678
+          --peer-vpc-id vpc-87654321
+#************************************************
+#Terraform — VPC Peering and Route Table
+#Your Terraform is mostly correct. The route destination should be the CIDR block of the peer VPC.
+#*************************************************************************************************
+# VPC Peering
+resource "aws_vpc_peering_connection" "pathnex_peering" {
+  vpc_id      = aws_vpc.pathnex_vpc.id
+  peer_vpc_id = aws_vpc.peer_vpc.id
+  auto_accept = true
+}
+
+
+# Route through VPC Peering
+resource "aws_route" "pathnex_route" {
+  route_table_id            = aws_route_table.pathnex_rt.id
+  destination_cidr_block    = aws_vpc.peer_vpc.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.pathnex_peering.id
+}
+#***************************************************************************
+#Kubernetes — Network Policy
+#***************************************************************************
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pathnex-vpc-policy
+  namespace: default
+
+spec:
+  podSelector:
+    matchLabels:
+      app: pathnex-app
+
+  policyTypes:
+    - Ingress
+
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: pathnex-db
+#******************************************************************************
+#This means:
+
+#Only Pods with app: pathnex-db are allowed to send ingress traffic to Pods with app: pathnex-app.
+
+#Important: A Kubernetes NetworkPolicy does not create VPC peering. VPC peering is an AWS networking feature; NetworkPolicy controls Pod-level traffic inside Kubernetes.
+#***************************************************************************************************************************
+#Docker — Save, Load & Backup
+#*************************************
+# Save Docker image
+docker save -o pathnex-nginx.tar pathnex-nginx
+
+# Load Docker image
+docker load -i pathnex-nginx.tar
+
+# Backup Docker volume
+docker run --rm \
+  -v pathnex-volume:/data \
+  -v "$(pwd):/backup" \
+  ubuntu \
+  tar czf /backup/pathnex-backup.tar.gz /data
+#*************************************************

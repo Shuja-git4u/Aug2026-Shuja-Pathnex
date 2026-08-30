@@ -1,0 +1,22 @@
+What I did today:
+-----------------
+3 hours Morning Class
+
+
+1 hour  - DevSecOps Security Tools
+
+
+
+Tomorrow's Plan:
+---------------
+1 hour - Revised Linux Commands and Interview Questions
+
+1 hour - Revised Git commands and Interview Questions
+
+1 hour - Practice Shell Scripting
+
+1 hour - Prepare to explain in the Evening Class
+
+1 hour - Prepare for Intro Video
+
+5 hour - Kubernetes La
