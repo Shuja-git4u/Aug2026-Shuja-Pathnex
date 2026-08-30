@@ -1,0 +1,867 @@
+#Congratulations! 🎉 This is essentially the final integration task where you combine the concepts you've practiced throughout the challenge.
+#*****************************************************************************************************************************#terraform/main.tf
+#*******************
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+module "pathnex_vpc" {
+  source = "./vpc"
+
+  project_name        = var.project_name
+  vpc_cidr            = var.vpc_cidr
+  public_subnet_cidrs = var.public_subnet_cidrs
+  private_subnet_cidrs = var.private_subnet_cidrs
+  availability_zones  = var.availability_zones
+}
+
+resource "aws_eks_cluster" "pathnex" {
+  name     = "${var.project_name}-eks"
+  role_arn = aws_iam_role.eks_cluster_role.arn
+
+  vpc_config {
+    subnet_ids = module.pathnex_vpc.private_subnet_ids
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_cluster_policy,
+    aws_iam_role_policy_attachment.eks_vpc_resource_controller
+  ]
+
+  tags = {
+    Name = "${var.project_name}-eks"
+  }
+}
+
+resource "aws_eks_node_group" "pathnex" {
+  cluster_name    = aws_eks_cluster.pathnex.name
+  node_group_name = "${var.project_name}-nodes"
+  node_role_arn   = aws_iam_role.eks_node_role.arn
+  subnet_ids      = module.pathnex_vpc.private_subnet_ids
+
+  instance_types = [var.eks_node_instance_type]
+
+  scaling_config {
+    desired_size = 2
+    min_size     = 1
+    max_size     = 4
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_worker_node_policy,
+    aws_iam_role_policy_attachment.eks_cni_policy,
+    aws_iam_role_policy_attachment.eks_container_registry_read_only
+  ]
+
+  tags = {
+    Name = "${var.project_name}-eks-node"
+  }
+}
+
+resource "aws_iam_role" "eks_cluster_role" {
+  name = "${var.project_name}-eks-cluster-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [{
+      Effect = "Allow"
+
+      Principal = {
+        Service = "eks.amazonaws.com"
+      }
+
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
+  role       = aws_iam_role.eks_cluster_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "eks_vpc_resource_controller" {
+  role       = aws_iam_role.eks_cluster_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
+}
+
+resource "aws_iam_role" "eks_node_role" {
+  name = "${var.project_name}-eks-node-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [{
+      Effect = "Allow"
+
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+}
+
+resource "aws_iam_role_policy_attachment" "eks_container_registry_read_only" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+#********************************************************************************
+#terraform/vpc.tf
+#*******************
+resource "aws_vpc" "pathnex" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.project_name}-vpc"
+  }
+}
+
+resource "aws_internet_gateway" "pathnex" {
+  vpc_id = aws_vpc.pathnex.id
+
+  tags = {
+    Name = "${var.project_name}-igw"
+  }
+}
+
+resource "aws_subnet" "public" {
+  count = length(var.public_subnet_cidrs)
+
+  vpc_id                  = aws_vpc.pathnex.id
+  cidr_block              = var.public_subnet_cidrs[count.index]
+  availability_zone       = var.availability_zones[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-public-${count.index + 1}"
+  }
+}
+
+resource "aws_subnet" "private" {
+  count = length(var.private_subnet_cidrs)
+
+  vpc_id            = aws_vpc.pathnex.id
+  cidr_block        = var.private_subnet_cidrs[count.index]
+  availability_zone = var.availability_zones[count.index]
+
+  tags = {
+    Name = "${var.project_name}-private-${count.index + 1}"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.pathnex.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.pathnex.id
+  }
+
+  tags = {
+    Name = "${var.project_name}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count = length(aws_subnet.public)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+#*************************************************
+#terraform security-groups.tf
+#*************************************************
+resource "aws_security_group" "pathnex_rds" {
+  name        = "${var.project_name}-rds-sg"
+  description = "Security group for Pathnex RDS"
+  vpc_id      = aws_vpc.pathnex.id
+
+  ingress {
+    description = "MySQL from EKS VPC"
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-rds-sg"
+  }
+}
+#**********************************************
+#terraform/rds.tf
+#**********************************************
+resource "aws_db_subnet_group" "pathnex" {
+  name       = "${var.project_name}-db-subnet-group"
+  subnet_ids = aws_subnet.private[*].id
+
+  tags = {
+    Name = "${var.project_name}-db-subnet-group"
+  }
+}
+
+resource "aws_db_instance" "pathnex" {
+  identifier = "${var.project_name}-mysql"
+
+  engine         = "mysql"
+  engine_version = "8.0"
+
+  instance_class    = var.db_instance_class
+  allocated_storage = 20
+  storage_type      = "gp3"
+
+  db_name  = var.db_name
+  username = var.db_username
+  password = var.db_password
+
+  port = 3306
+
+  db_subnet_group_name   = aws_db_subnet_group.pathnex.name
+  vpc_security_group_ids = [aws_security_group.pathnex_rds.id]
+
+  publicly_accessible = false
+
+  skip_final_snapshot = true
+
+  tags = {
+    Name = "${var.project_name}-mysql"
+  }
+}
+#************************************************************
+#terraform/variables.tf
+#************************************************************
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
+}
+
+variable "project_name" {
+  type    = string
+  default = "pathnex"
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.0.0.0/16"
+}
+
+variable "availability_zones" {
+  type = list(string)
+
+  default = [
+    "us-east-1a",
+    "us-east-1b"
+  ]
+}
+
+variable "public_subnet_cidrs" {
+  type = list(string)
+
+  default = [
+    "10.0.1.0/24",
+    "10.0.2.0/24"
+  ]
+}
+
+variable "private_subnet_cidrs" {
+  type = list(string)
+
+  default = [
+    "10.0.11.0/24",
+    "10.0.12.0/24"
+  ]
+}
+
+variable "eks_node_instance_type" {
+  type    = string
+  default = "t3.medium"
+}
+
+variable "db_instance_class" {
+  type    = string
+  default = "db.t3.micro"
+}
+
+variable "db_name" {
+  type    = string
+  default = "pathnex"
+}
+
+variable "db_username" {
+  type    = string
+  default = "pathnexadmin"
+}
+
+variable "db_password" {
+  type      = string
+  sensitive = true
+}
+#*************************************
+#terraform/outputs.tf
+#*************************************
+output "vpc_id" {
+  value = aws_vpc.pathnex.id
+}
+
+output "eks_cluster_name" {
+  value = aws_eks_cluster.pathnex.name
+}
+
+output "eks_cluster_endpoint" {
+  value = aws_eks_cluster.pathnex.endpoint
+}
+
+output "rds_endpoint" {
+  value = aws_db_instance.pathnex.address
+}
+#********************************************
+Kubernetes manifests
+kubernetes/namespace.yaml
+#********************************************
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pathnex
+#*************************
+kubernetes/deployment.yaml
+#****************************
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pathnex-app
+  namespace: pathnex
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: pathnex-app
+
+  template:
+    metadata:
+      labels:
+        app: pathnex-app
+
+    spec:
+      containers:
+        - name: pathnex-app
+          image: pathnex-web-app:latest
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 80
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+#***********************************
+#kubernetes/service.yaml
+#************************************
+apiVersion: v1
+kind: Service
+metadata:
+  name: pathnex-service
+  namespace: pathnex
+spec:
+  selector:
+    app: pathnex-app
+
+  ports:
+    - port: 80
+      targetPort: 80
+
+  type: LoadBalancer
+#**************************
+#Using LoadBalancer makes the application externally accessible when running on EKS.
+#************************************************************************************
+kubernetes/hpa.yaml
+#************************
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pathnex-hpa
+  namespace: pathnex
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pathnex-app
+
+  minReplicas: 2
+  maxReplicas: 10
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+#**********************************
+#kubernetes/network-policy.yaml
+#**********************************
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pathnex-network-policy
+  namespace: pathnex
+spec:
+  podSelector:
+    matchLabels:
+      app: pathnex-app
+
+  policyTypes:
+    - Ingress
+
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 80
+#**************************************
+#Helm
+helm/pathnex-app/Chart.yaml
+#**************************************
+apiVersion: v2
+name: pathnex-app
+description: Pathnex Application Helm Chart
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+#************************************************
+#helm/pathnex-app/values.yaml
+#*************************************************
+replicaCount: 2
+
+image:
+  repository: pathnex-web-app
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 80
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+#***********************************************
+#helm/pathnex-app/templates/deployment.yaml
+#***********************************************
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pathnex-app
+spec:
+  replicas: {{ .Values.replicaCount }}
+
+  selector:
+    matchLabels:
+      app: pathnex-app
+
+  template:
+    metadata:
+      labels:
+        app: pathnex-app
+
+    spec:
+      containers:
+        - name: pathnex-app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          ports:
+            - containerPort: 80
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+#*************************************************************************
+#helm/pathnex-app/templates/service.yaml
+#***************************************************************************
+apiVersion: v1
+apiVersion: v1
+kind: Service
+metadata:
+  name: pathnex-service
+spec:
+  type: {{ .Values.service.type }}
+
+  selector:
+    app: pathnex-app
+
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+#********************************************************
+#helm/pathnex-app/templates/hpa.yaml
+#*********************************************************
+{{- if .Values.autoscaling.enabled }}
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+
+metadata:
+  name: pathnex-hpa
+
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pathnex-app
+
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+
+{{- end }}
+#*****************************************************************
+Docker
+docker/Dockerfile
+
+For this example, we'll deploy a simple Nginx frontend.
+#************************************************************************
+FROM nginx:alpine
+
+COPY docker/index.html /usr/share/nginx/html/index.html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://127.0.0.1/ || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]
+#*****************************************************************************
+#docker/index.html
+#***************************
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pathnex Application</title>
+</head>
+<body>
+    <h1>Welcome to Pathnex Application</h1>
+    <p>Application deployed successfully.</p>
+</body>
+</html>
+#*****************************************
+#docker/.dockerignore
+.git
+.gitignore
+.env
+node_modules
+*.log
+temp
+#*****************************************
+6. Jenkinsfile
+jenkins/Jenkinsfile
+#******************************************
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "pathnex-web-app"
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+        HELM_RELEASE = "pathnex-app"
+        HELM_CHART   = "./helm/pathnex-app"
+        K8S_NAMESPACE = "pathnex"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                echo 'Building Docker image...'
+
+                sh '''
+                    docker build \
+                      -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                      -f docker/Dockerfile .
+                '''
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Validating Kubernetes and Helm configuration...'
+
+                sh '''
+                    helm lint ${HELM_CHART}
+                    kubectl apply --dry-run=client -f kubernetes/
+                '''
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo 'Deploying Pathnex application...'
+
+                sh '''
+                    helm upgrade --install ${HELM_RELEASE} ${HELM_CHART} \
+                      --namespace ${K8S_NAMESPACE} \
+                      --create-namespace \
+                      --set image.repository=${IMAGE_NAME} \
+                      --set image.tag=${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh '''
+                    kubectl rollout status \
+                      deployment/pathnex-app \
+                      -n ${K8S_NAMESPACE} \
+                      --timeout=180s
+
+                    kubectl get pods -n ${K8S_NAMESPACE}
+                    kubectl get svc -n ${K8S_NAMESPACE}
+                    kubectl get hpa -n ${K8S_NAMESPACE}
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pathnex application deployed successfully!'
+        }
+
+        failure {
+            echo 'Pathnex deployment failed.'
+        }
+
+        always {
+            sh 'docker image prune -f || true'
+        }
+    }
+}
+#**********************************************************
+7. GitLab CI/CD
+.gitlab-ci.yml
+stages:
+  - validate
+  - build
+  - deploy
+
+variables:
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE/pathnex-web-app"
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+
+validate:
+  stage: validate
+  image:
+    name: alpine/helm:3.18.0
+    entrypoint: [""]
+  script:
+    - helm lint helm/pathnex-app
+
+build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+    - docker build -t "$IMAGE_NAME:$IMAGE_TAG" -f docker/Dockerfile .
+    - docker push "$IMAGE_NAME:$IMAGE_TAG"
+
+deploy:
+  stage: deploy
+  image:
+    name: alpine/helm:3.18.0
+    entrypoint: [""]
+  script:
+    - helm upgrade --install pathnex-app helm/pathnex-app
+        --namespace pathnex
+        --create-namespace
+        --set image.repository="$IMAGE_NAME"
+        --set image.tag="$IMAGE_TAG"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+#******************************************************************
+Docker Compose
+docker-compose.yml
+services:
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: pathnex-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  backend:
+    build: ./backend
+    container_name: pathnex-backend
+    ports:
+      - "5000:5000"
+    environment:
+      DB_HOST: database
+      DB_PORT: 3306
+      DB_NAME: pathnex
+      DB_USER: pathnex
+      DB_PASSWORD: pathnexpassword
+    depends_on:
+      database:
+        condition: service_healthy
+
+  database:
+    image: mysql:8.0
+    container_name: pathnex-mysql
+    environment:
+      MYSQL_DATABASE: pathnex
+      MYSQL_USER: pathnex
+      MYSQL_PASSWORD: pathnexpassword
+      MYSQL_ROOT_PASSWORD: rootpassword
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql-data:
+#**********************************************
+Deployment sequence
+
+Once these files are in GitHub, your basic deployment sequence is:
+
+Provision AWS
+cd terraform
+
+terraform init
+terraform fmt -recursive
+terraform validate
+terraform plan
+terraform apply
+#*******************************
+Then configure kubectl for EKS:
+
+aws eks update-kubeconfig \
+  --region us-east-1 \
+  --name pathnex-eks
+#*************************************
+Deploy Kubernetes
+kubectl apply -f kubernetes/namespace.yaml
+kubectl apply -f kubernetes/deployment.yaml
+kubectl apply -f kubernetes/service.yaml
+kubectl apply -f kubernetes/hpa.yaml
+kubectl apply -f kubernetes/network-policy.yaml
+
+Or use Helm:
+
+helm upgrade --install pathnex-app ./helm/pathnex-app \
+  --namespace pathnex \
+  --create-namespace
+#**************************************************************
+Verify:
+
+kubectl get pods -n pathnex
+kubectl get svc -n pathnex
+kubectl get hpa -n pathnex
+#*******************************************************************
